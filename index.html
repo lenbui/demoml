@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ML Dashboard — Transformers.js</title>
+    <meta
+      name="description"
+      content="Dashboard minh hoạ các use case Machine Learning chạy hoàn toàn trong browser bằng Transformers.js"
+    />
+  </head>
+  <!--
+    Tắt các "trợ giúp" nhập liệu của browser cho toàn bộ trang.
+
+    Vì sao cần: dữ liệu nhập vào dashboard là câu tiếng Việt, thuật ngữ ML và
+    đoạn code. Spellchecker gạch đỏ gần như mọi từ — rối mắt và vô nghĩa. Tệ hơn,
+    autocorrect trên mobile tự SỬA nội dung, làm sai luôn thứ đang được đo:
+    tokenizer sẽ nhận một chuỗi khác chuỗi người dùng thực sự gõ.
+
+    Đặt ở <body> thay vì từng thẻ input, nhưng ba thuộc tính KHÔNG giống nhau:
+      spellcheck     tri-state và di truyền → đã kiểm chứng: mọi textarea trong
+                     dashboard nhận effective spellcheck=false, kể cả demo thêm
+                     về sau. Đây là thứ giải quyết vấn đề gạch đỏ.
+      autocapitalize theo spec thì di truyền từ tổ tiên. Chỉ có tác dụng trên bàn
+                     phím ảo, nên không kiểm chứng được trên desktop.
+      autocorrect    thuộc tính riêng của WebKit/Safari, KHÔNG di truyền. Để đây
+                     như một gợi ý cho Safari trên iOS; demo nào thật sự cần chắc
+                     chắn thì phải đặt trực tiếp trên chính thẻ <textarea>.
+  -->
+  <body spellcheck="false" autocapitalize="off" autocorrect="off">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

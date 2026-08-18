@@ -1,0 +1,132 @@
+# Build dashboard rồi deploy lên GitHub Pages.
+#
+# ── Trước khi workflow này chạy được, phải bật Pages một lần bằng tay ──
+#   Settings > Pages > Build and deployment > Source = "GitHub Actions"
+#
+# Không bật thì job `deploy` fail với "Pages site not found" — nhưng job `build`
+# vẫn xanh và artifact vẫn được upload, nên bật xong chỉ cần Re-run failed jobs,
+# không phải build lại từ đầu.
+#
+# CỐ Ý KHÔNG dùng actions/configure-pages ở đây. Action đó gọi API Pages ngay
+# trong job build, nên repo chưa bật Pages là hỏng luôn cả bước build (đã gặp
+# thật: "Get Pages site failed ... Not Found"). Nó chỉ cần thiết cho các static
+# site generator (Next/Nuxt/Gatsby/SvelteKit) hoặc để đọc output base_path —
+# mà base ở đây tự tính lấy ở bước bên dưới. Tuỳ chọn `enablement: true` của nó
+# cũng không cứu được: nó đòi Personal Access Token chứ không nhận GITHUB_TOKEN.
+#
+# ── Ba điều đáng biết về việc deploy app ML tĩnh này ──
+#
+# 1. KHÔNG có model nào nằm trong bản deploy. Model được tải từ huggingface.co
+#    lúc người dùng bấm nút, rồi browser cache lại. Thư mục public/models/ (255 MB
+#    ở máy giảng viên) đã nằm trong .gitignore nên CI không bao giờ thấy nó —
+#    xem bước "Kiểm tra dung lượng" bên dưới để hiểu vì sao điều đó là bắt buộc
+#    chứ không phải tối ưu.
+#
+# 2. Bản deploy MẤT WASM ĐA LUỒNG. vite.config.ts có set COOP/COEP để bật
+#    SharedArrayBuffer, nhưng header đó chỉ áp dụng cho dev server. GitHub Pages
+#    không cho set header, nên ORT chạy đơn luồng — chậm hơn 2–4 lần. App tự
+#    hiện tình trạng này ở thanh trên cùng, không im lặng. Máy có WebGPU thì
+#    không bị ảnh hưởng. Muốn giữ đa luồng: dùng HF Spaces / Netlify / Vercel.
+#
+# 3. base URL được truyền bằng CỜ CLI, không phải sửa vite.config.ts. Nhờ vậy
+#    `npm run dev` ở máy vẫn chạy ở '/' mà không ai phải nhớ sửa lại file.
+
+name: Deploy lên GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  # Cho phép bấm chạy tay ở tab Actions — tiện khi vừa bật Pages xong.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  # Bắt buộc: deploy-pages xác thực bằng OIDC token chứ không dùng PAT.
+  id-token: write
+
+# Không huỷ lần deploy đang chạy dở (cancel-in-progress: false): huỷ giữa chừng
+# có thể để site ở trạng thái nửa vời.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          # Vite 7 cần Node >= 20.19 hoặc >= 22.12.
+          node-version: '22'
+          cache: npm
+
+      - name: Cài dependency
+        run: npm ci
+
+      # Chạy riêng thay vì dùng `npm run build` (vốn là tsc && vite build), vì
+      # bước build bên dưới cần truyền thêm cờ --base.
+      - name: Kiểm tra kiểu
+        run: npm run typecheck
+
+      - name: Tính base URL
+        id: base
+        env:
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.event.repository.name }}
+        run: |
+          # Hai kiểu trang Pages cần hai base khác nhau:
+          #   trang project : user.github.io/ten-repo  -> base '/ten-repo/'
+          #   trang user/org: user.github.io           -> base '/'
+          # Đoán nhầm thì mọi file trong /assets/ trả về 404 và trang trắng tinh.
+          owner=$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')
+          repo=$(printf '%s' "$REPO" | tr '[:upper:]' '[:lower:]')
+          if [ "$repo" = "$owner.github.io" ]; then
+            value='/'
+          else
+            value="/$repo/"
+          fi
+          echo "Base URL: $value"
+          echo "value=$value" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        run: npx vite build --base="${{ steps.base.outputs.value }}"
+
+      # Lưới an toàn cho đúng cái bẫy đã gặp thật: Vite copy nguyên public/ vào
+      # dist/. Nếu ai đó bỏ public/models/ khỏi .gitignore rồi commit, dist/ phình
+      # từ 23 MB lên 278 MB và chứa một file 118 MB — vượt giới hạn cứng 100 MB/file
+      # của GitHub. Thà fail ở đây với thông báo rõ ràng, còn hơn để lần deploy
+      # chạy 20 phút rồi hỏng ở tầng khác.
+      - name: Kiểm tra dung lượng bản build
+        run: |
+          echo "Tổng dung lượng dist/: $(du -sh dist | cut -f1)"
+          echo "Mười file nặng nhất:"
+          find dist -type f -printf '%s\t%p\n' | sort -rn | head -10 \
+            | awk -F'\t' '{ printf "  %6.1f MB  %s\n", $1/1048576, $2 }'
+
+          oversized=$(find dist -type f -size +99M)
+          if [ -n "$oversized" ]; then
+            echo "::error::Có file vượt quá giới hạn 100 MB của GitHub:"
+            echo "$oversized"
+            echo "Gần như chắc chắn là public/models/ đã lọt vào git."
+            echo "Model KHÔNG cần nằm trong bản deploy: ở chế độ mặc định app tải"
+            echo "model từ huggingface.co. public/models/ chỉ dùng cho chế độ"
+            echo "offline VITE_LOCAL_MODELS=true ở phòng lab."
+            exit 1
+          fi
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

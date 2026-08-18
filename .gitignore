@@ -1,0 +1,14 @@
+node_modules
+dist
+.env.local
+.DS_Store
+*.local
+
+# Model tải bằng `npm run fetch-models` — rất nặng, không commit vào git.
+public/models/
+
+README-full.md
+
+# Allowlist quyền của Claude Code — theo từng máy, không phải cấu hình dự án.
+# .claude/launch.json thì NGƯỢC LẠI: nên commit, vì nó khai báo cách chạy dev server.
+.claude/settings.local.json
